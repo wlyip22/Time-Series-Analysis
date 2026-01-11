@@ -15,10 +15,30 @@ from statsmodels.tsa.arima.model import ARIMA
 import matplotlib.pyplot as plt
 
 # ---------------------------
-# Sidebar
+# Page title
+# ---------------------------
+st.title("Taiwan Stock Prediction System")
+
+# ---------------------------
+# 1️⃣ Fundamental Metrics Reference Table
+# ---------------------------
+st.subheader("Fundamental Metrics Reference")
+st.markdown("""
+| Metric                       | Purpose                         | Notes                                  |
+| ---------------------------- | ------------------------------- | -------------------------------------- |
+| **P/E ratio (本益比)**        | Price-to-Earnings; valuation    | High P/E may indicate overvaluation    |
+| **EPS (每股盈餘)**            | Profit per share                | Compare YoY growth                     |
+| **Revenue & Revenue Growth**  | How fast the company is growing | Year-over-year or quarter-over-quarter |
+| **Net Income & Margin**       | Profitability                   | Gross/net margin trends                |
+| **ROE (Return on Equity)**    | How efficiently equity is used  | High ROE = efficient company           |
+| **Debt-to-Equity**            | Financial leverage              | Risk measure                           |
+| **Dividend Yield**            | Income from dividends           | Important for dividend investors       |
+""")
+
+# ---------------------------
+# Sidebar: User Inputs
 # ---------------------------
 st.sidebar.title("Settings")
-
 tickers_input = st.sidebar.text_input(
     "Enter Taiwan Stock Symbols (comma-separated):",
     "2330.TW,2317.TW,2454.TW"
@@ -82,7 +102,7 @@ if price_data.empty:
     st.error("No price data found for this stock.")
 else:
     # ---------------------------
-    # Show fundamentals table
+    # Show fundamentals for selected stock
     # ---------------------------
     if not fund_data.empty:
         st.subheader("Fundamentals (EPS & Revenue)")
