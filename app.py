@@ -1,5 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals-Informed Forecast (Fixed)
+# app.py - Taiwan Stock Prediction + Fundamentals + Forecast
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -31,21 +31,12 @@ test_size = st.sidebar.slider("Test Set Size (days):", 30, 200, 50)
 forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 
 # ---------------------------
-# Load stock price data
+# Load price data
 # ---------------------------
 @st.cache_data
 def load_price_data(symbol):
     df = yf.download(symbol, start="2021-01-01", end="2026-01-01")
     return df[['Close']].reset_index()
-
-def create_features(df, lags, include_rolling=True):
-    df = df.copy()
-    for i in range(1, lags + 1):
-        df[f'lag_{i}'] = df['Close'].shift(i)
-    if include_rolling:
-        df['rolling_mean'] = df['Close'].shift(1).rolling(3).mean()
-        df['rolling_std'] = df['Close'].shift(1).rolling(3).std()
-    return df.dropna()
 
 # ---------------------------
 # Load fundamentals
@@ -60,7 +51,6 @@ def load_fundamentals(symbol):
             fin['EPS'] = fin['Net Income'] / shares_outstanding
         else:
             fin['EPS'] = np.nan
-        # Revenue column
         if 'Total Revenue' in fin.columns:
             fin['Revenue'] = fin['Total Revenue']
         else:
@@ -70,6 +60,18 @@ def load_fundamentals(symbol):
         return pd.DataFrame()
 
 # ---------------------------
+# Feature engineering
+# ---------------------------
+def create_features(df, lags, include_rolling=True):
+    df = df.copy()
+    for i in range(1, lags + 1):
+        df[f'lag_{i}'] = df['Close'].shift(i)
+    if include_rolling:
+        df['rolling_mean'] = df['Close'].shift(1).rolling(3).mean()
+        df['rolling_std'] = df['Close'].shift(1).rolling(3).std()
+    return df.dropna()
+
+# ---------------------------
 # Load data
 # ---------------------------
 st.header(f"Stock: {ticker}")
@@ -77,28 +79,36 @@ price_data = load_price_data(ticker)
 fund_data = load_fundamentals(ticker)
 
 if price_data.empty:
-    st.error("No price data found.")
+    st.error("No price data found for this stock.")
 else:
     # ---------------------------
-    # Merge fundamentals to daily data (fixed)
+    # Show fundamentals table
+    # ---------------------------
+    if not fund_data.empty:
+        st.subheader("Fundamentals (EPS & Revenue)")
+        st.table(fund_data.head(5))
+    else:
+        st.info("No fundamental data available.")
+
+    # ---------------------------
+    # Merge fundamentals to daily price for forecasting
     # ---------------------------
     if not fund_data.empty:
         fund_data_daily = fund_data.reindex(price_data['Date'], method='ffill')
-        fund_data_daily.index = price_data.index  # align index
+        fund_data_daily.index = price_data.index
         price_data['EPS'] = fund_data_daily['EPS']
         price_data['Revenue'] = fund_data_daily['Revenue']
     else:
         price_data['EPS'] = 0
         price_data['Revenue'] = 0
 
-    # Fill missing EPS/Revenue with last available value
     price_data[['EPS','Revenue']] = price_data[['EPS','Revenue']].fillna(method='ffill').fillna(0)
 
     # ---------------------------
-    # Feature Engineering
+    # Feature engineering for ML
     # ---------------------------
     data_feat = create_features(price_data, lags, include_rolling=True)
-    X = data_feat.drop(['Date', 'Close'], axis=1)
+    X = data_feat.drop(['Date','Close'], axis=1)
     y = data_feat['Close']
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=test_size)
@@ -143,15 +153,15 @@ else:
         st.warning("ARIMA failed or not enough data.")
 
     # ---------------------------
-    # Model performance
+    # Show performance table
     # ---------------------------
     perf_df = pd.DataFrame(results)
-    best_model_name = perf_df.loc[perf_df["RMSE"].idxmin(), "Model"]
+    best_model_name = perf_df.loc[perf_df['RMSE'].idxmin(), 'Model']
     st.subheader(f"Best Model: {best_model_name}")
     st.table(perf_df)
 
     # ---------------------------
-    # Future Forecast
+    # Future N-day forecast for best ML model
     # ---------------------------
     future_preds = []
     if best_model_name in ml_models:
@@ -170,13 +180,13 @@ else:
                 new_row_data[f'lag_{i}'] = new_row_data[f'lag_{i-1}']
             new_row_data['lag_1'] = next_price
 
-            # Rolling stats
+            # Update rolling stats
             if 'rolling_mean' in new_row_data:
                 lookback = [new_row_data[f'lag_{i}'] for i in range(1, min(4,lags+1))]
                 new_row_data['rolling_mean'] = np.mean(lookback)
                 new_row_data['rolling_std'] = np.std(lookback)
 
-            # EPS/Revenue remain constant for future days
+            # Keep EPS & Revenue constant
             new_row_data['EPS'] = current_batch['EPS'].values[0]
             new_row_data['Revenue'] = current_batch['Revenue'].values[0]
 
@@ -190,6 +200,7 @@ else:
     plt.figure(figsize=(10,5))
     plt.plot(y_test.values, label="Actual", color="black")
 
+    # Best model backtest
     if best_model_name in ml_models:
         plt.plot(predictions[best_model_name], label="Backtest Prediction", color="red")
         future_x = np.arange(len(y_test), len(y_test)+forecast_days)
@@ -197,8 +208,23 @@ else:
     else:
         plt.plot(predictions.get(best_model_name, []), label="Backtest Prediction", color="red")
 
-    plt.title(f"{ticker} - Backtesting & Future Forecast (Fundamentals Included)")
+    plt.title(f"{ticker} - Backtesting & Future Forecast")
     plt.xlabel("Days")
     plt.ylabel("Close Price")
     plt.legend()
     st.pyplot(plt)
+
+    # ---------------------------
+    # Expandable section: show all model predictions
+    # ---------------------------
+    with st.expander("Show All Model Predictions"):
+        plt.figure(figsize=(10,5))
+        plt.plot(y_test.values, label="Actual", color="black")
+        colors = {'Linear Regression':'green','Random Forest':'blue','XGBoost':'red','SVR':'orange','ARIMA':'purple'}
+        for name, pred in predictions.items():
+            plt.plot(pred, label=name, color=colors.get(name,'gray'))
+        plt.xlabel("Days")
+        plt.ylabel("Close Price")
+        plt.title(f"{ticker} - All Model Predictions")
+        plt.legend()
+        st.pyplot(plt)
