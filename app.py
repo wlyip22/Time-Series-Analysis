@@ -1,5 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals + Future Forecast
+# app.py - Taiwan Stock Prediction + Fundamentals + Future Forecast + Historical EPS/Revenue
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -31,10 +31,10 @@ test_size = st.sidebar.slider("Test Set Size (days):", 30, 200, 50)
 forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 
 # ---------------------------
-# Load stock data
+# Load stock price data
 # ---------------------------
 @st.cache_data
-def load_data(symbol):
+def load_price_data(symbol):
     df = yf.download(symbol, start="2020-01-01", end="2025-01-01")
     return df[['Close']].reset_index()
 
@@ -51,15 +51,15 @@ def create_features(df, lags, include_rolling=True):
 # Load data
 # ---------------------------
 st.header(f"Stock: {ticker}")
-data = load_data(ticker)
+price_data = load_price_data(ticker)
 
-if data.empty:
-    st.error("No data found for this stock.")
+if price_data.empty:
+    st.error("No price data found for this stock.")
 else:
     # ---------------------------
-    # Fundamental Analysis
+    # Fundamental Analysis (latest snapshot)
     # ---------------------------
-    st.subheader("Fundamental Analysis")
+    st.subheader("Fundamental Analysis (Latest)")
     try:
         ticker_obj = yf.Ticker(ticker)
         info = ticker_obj.info
@@ -73,7 +73,7 @@ else:
             "Profit Margin": info.get("profitMargins", "N/A"),
         }
 
-        # Format numbers for readability
+        # Format numbers
         for k, v in fundamentals.items():
             if isinstance(v, (int, float)):
                 if k in ["Market Cap", "Revenue"]:
@@ -85,12 +85,36 @@ else:
 
         st.table(pd.DataFrame(fundamentals.items(), columns=["Metric", "Value"]))
     except:
-        st.warning("Fundamental data not available for this stock.")
+        st.warning("Latest fundamental data not available for this stock.")
+
+    # ---------------------------
+    # Historical fundamentals (EPS and Revenue trends)
+    # ---------------------------
+    st.subheader("Historical Fundamentals (Annual)")
+
+    try:
+        fin = ticker_obj.financials.T  # transpose: columns = Net Income, Revenue, etc.
+        shares_outstanding = info.get("sharesOutstanding", None)
+
+        # EPS calculation: EPS = Net Income / Shares
+        if shares_outstanding:
+            fin['EPS'] = fin['Net Income'] / shares_outstanding
+        else:
+            fin['EPS'] = np.nan
+
+        # Keep only EPS and Revenue
+        hist_fund = fin[['EPS','Total Revenue']].rename(columns={'Total Revenue':'Revenue'})
+        hist_fund = hist_fund.sort_index()  # chronological order
+
+        st.line_chart(hist_fund)
+
+    except:
+        st.warning("Historical fundamentals not available.")
 
     # ---------------------------
     # Feature Engineering for ML
     # ---------------------------
-    data_feat = create_features(data, lags, include_rolling=True)
+    data_feat = create_features(price_data, lags, include_rolling=True)
     X = data_feat.drop(['Date', 'Close'], axis=1)
     y = data_feat['Close']
 
@@ -125,7 +149,7 @@ else:
     # ARIMA baseline
     # ---------------------------
     try:
-        arima_model = ARIMA(data['Close'][:-len(X_test)], order=(5,1,0))
+        arima_model = ARIMA(price_data['Close'][:-len(X_test)], order=(5,1,0))
         arima_result = arima_model.fit()
         pred_arima = arima_result.forecast(steps=len(X_test))
         predictions["ARIMA"] = pred_arima
@@ -138,7 +162,7 @@ else:
         st.warning("ARIMA failed or not enough data.")
 
     # ---------------------------
-    # Show model performance
+    # Model performance
     # ---------------------------
     perf_df = pd.DataFrame(results)
     best_model_name = perf_df.loc[perf_df["RMSE"].idxmin(), "Model"]
@@ -146,28 +170,25 @@ else:
     st.table(perf_df)
 
     # ---------------------------
-    # Future Forecast (recursive, ML models only)
+    # Future Forecast (ML models only)
     # ---------------------------
     future_preds = []
     if best_model_name in ml_models:
         best_model = ml_models[best_model_name]
         best_model.fit(X, y)  # Refit on full dataset
 
-        # Start from last available row
         current_batch = X.iloc[-1:].copy()
-
         for _ in range(forecast_days):
             pred_output = best_model.predict(current_batch)
             next_price = float(np.array(pred_output).flatten()[0])
             future_preds.append(next_price)
 
-            # Update lag features for next prediction
+            # Update lag features
             new_row_data = current_batch.iloc[0].copy()
             for i in range(lags, 1, -1):
                 new_row_data[f'lag_{i}'] = new_row_data[f'lag_{i-1}']
             new_row_data['lag_1'] = next_price
 
-            # Update rolling stats if present
             if 'rolling_mean' in new_row_data:
                 lookback = [new_row_data[f'lag_{i}'] for i in range(1, min(4,lags+1))]
                 new_row_data['rolling_mean'] = np.mean(lookback)
@@ -175,7 +196,7 @@ else:
 
             current_batch = pd.DataFrame([new_row_data])
     else:
-        st.warning(f"Future forecast for {best_model_name} (ARIMA) is not supported in this loop.")
+        st.warning(f"Future forecast for {best_model_name} (ARIMA) not supported.")
 
     # ---------------------------
     # Visualization
