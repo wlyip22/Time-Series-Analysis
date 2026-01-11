@@ -1,5 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals + Forecast
+# app.py - Taiwan Stock Prediction + Real Fundamentals + Forecast
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -20,22 +20,6 @@ import matplotlib.pyplot as plt
 st.title("Taiwan Stock Prediction System")
 
 # ---------------------------
-# 1️⃣ Fundamental Metrics Reference Table
-# ---------------------------
-st.subheader("Fundamental Metrics Reference")
-st.markdown("""
-| Metric                       | Purpose                         | Notes                                  |
-| ---------------------------- | ------------------------------- | -------------------------------------- |
-| **P/E ratio (本益比)**        | Price-to-Earnings; valuation    | High P/E may indicate overvaluation    |
-| **EPS (每股盈餘)**            | Profit per share                | Compare YoY growth                     |
-| **Revenue & Revenue Growth**  | How fast the company is growing | Year-over-year or quarter-over-quarter |
-| **Net Income & Margin**       | Profitability                   | Gross/net margin trends                |
-| **ROE (Return on Equity)**    | How efficiently equity is used  | High ROE = efficient company           |
-| **Debt-to-Equity**            | Financial leverage              | Risk measure                           |
-| **Dividend Yield**            | Income from dividends           | Important for dividend investors       |
-""")
-
-# ---------------------------
 # Sidebar: User Inputs
 # ---------------------------
 st.sidebar.title("Settings")
@@ -51,33 +35,49 @@ test_size = st.sidebar.slider("Test Set Size (days):", 30, 200, 50)
 forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 
 # ---------------------------
-# Load price data
+# Fetch real fundamentals
+# ---------------------------
+@st.cache_data
+def get_fundamentals(symbol):
+    ticker_obj = yf.Ticker(symbol)
+    try:
+        info = ticker_obj.info
+        fin = ticker_obj.financials.T  # annual
+        shares = info.get("sharesOutstanding", None)
+        if shares and 'Net Income' in fin.columns:
+            fin['EPS'] = fin['Net Income'] / shares
+        else:
+            fin['EPS'] = None
+        if 'Total Revenue' in fin.columns:
+            fin['Revenue'] = fin['Total Revenue']
+        else:
+            fin['Revenue'] = None
+
+        pe_ratio = info.get("trailingPE", None)
+        dividend_yield = info.get("dividendYield", None)
+        debt_to_equity = info.get("debtToEquity", None)
+        roe = info.get("returnOnEquity", None)
+
+        data = {
+            "Metric": ["EPS", "Revenue", "P/E ratio", "Dividend Yield", "Debt/Equity", "ROE"],
+            "Value": [fin['EPS'].iloc[0] if fin['EPS'].notna().any() else "N/A",
+                      fin['Revenue'].iloc[0] if fin['Revenue'].notna().any() else "N/A",
+                      pe_ratio if pe_ratio else "N/A",
+                      dividend_yield if dividend_yield else "N/A",
+                      debt_to_equity if debt_to_equity else "N/A",
+                      roe if roe else "N/A"]
+        }
+        return pd.DataFrame(data)
+    except:
+        return pd.DataFrame({"Metric":[], "Value":[]})
+
+# ---------------------------
+# Load daily price data
 # ---------------------------
 @st.cache_data
 def load_price_data(symbol):
     df = yf.download(symbol, start="2021-01-01", end="2026-01-01")
     return df[['Close']].reset_index()
-
-# ---------------------------
-# Load fundamentals
-# ---------------------------
-@st.cache_data
-def load_fundamentals(symbol):
-    ticker_obj = yf.Ticker(symbol)
-    try:
-        fin = ticker_obj.financials.T  # annual financials
-        shares_outstanding = ticker_obj.info.get("sharesOutstanding", None)
-        if shares_outstanding and 'Net Income' in fin.columns:
-            fin['EPS'] = fin['Net Income'] / shares_outstanding
-        else:
-            fin['EPS'] = np.nan
-        if 'Total Revenue' in fin.columns:
-            fin['Revenue'] = fin['Total Revenue']
-        else:
-            fin['Revenue'] = np.nan
-        return fin[['EPS','Revenue']].sort_index()
-    except:
-        return pd.DataFrame()
 
 # ---------------------------
 # Feature engineering
@@ -92,38 +92,23 @@ def create_features(df, lags, include_rolling=True):
     return df.dropna()
 
 # ---------------------------
-# Load data
+# Display fundamentals
 # ---------------------------
 st.header(f"Stock: {ticker}")
-price_data = load_price_data(ticker)
-fund_data = load_fundamentals(ticker)
+fund_df = get_fundamentals(ticker)
+if not fund_df.empty:
+    st.subheader("Real Fundamental Data")
+    st.table(fund_df)
+else:
+    st.info("No fundamental data available for this stock.")
 
+# ---------------------------
+# Load price data
+# ---------------------------
+price_data = load_price_data(ticker)
 if price_data.empty:
     st.error("No price data found for this stock.")
 else:
-    # ---------------------------
-    # Show fundamentals for selected stock
-    # ---------------------------
-    if not fund_data.empty:
-        st.subheader("Fundamentals (EPS & Revenue)")
-        st.table(fund_data.head(5))
-    else:
-        st.info("No fundamental data available.")
-
-    # ---------------------------
-    # Merge fundamentals to daily price for forecasting
-    # ---------------------------
-    if not fund_data.empty:
-        fund_data_daily = fund_data.reindex(price_data['Date'], method='ffill')
-        fund_data_daily.index = price_data.index
-        price_data['EPS'] = fund_data_daily['EPS']
-        price_data['Revenue'] = fund_data_daily['Revenue']
-    else:
-        price_data['EPS'] = 0
-        price_data['Revenue'] = 0
-
-    price_data[['EPS','Revenue']] = price_data[['EPS','Revenue']].fillna(method='ffill').fillna(0)
-
     # ---------------------------
     # Feature engineering for ML
     # ---------------------------
@@ -181,7 +166,7 @@ else:
     st.table(perf_df)
 
     # ---------------------------
-    # Future N-day forecast for best ML model
+    # Future forecast (ML models only)
     # ---------------------------
     future_preds = []
     if best_model_name in ml_models:
@@ -206,10 +191,6 @@ else:
                 new_row_data['rolling_mean'] = np.mean(lookback)
                 new_row_data['rolling_std'] = np.std(lookback)
 
-            # Keep EPS & Revenue constant
-            new_row_data['EPS'] = current_batch['EPS'].values[0]
-            new_row_data['Revenue'] = current_batch['Revenue'].values[0]
-
             current_batch = pd.DataFrame([new_row_data])
     else:
         st.warning(f"Future forecast for {best_model_name} (ARIMA) not supported.")
@@ -219,8 +200,6 @@ else:
     # ---------------------------
     plt.figure(figsize=(10,5))
     plt.plot(y_test.values, label="Actual", color="black")
-
-    # Best model backtest
     if best_model_name in ml_models:
         plt.plot(predictions[best_model_name], label="Backtest Prediction", color="red")
         future_x = np.arange(len(y_test), len(y_test)+forecast_days)
@@ -235,7 +214,7 @@ else:
     st.pyplot(plt)
 
     # ---------------------------
-    # Expandable section: show all model predictions
+    # Expandable: all model predictions
     # ---------------------------
     with st.expander("Show All Model Predictions"):
         plt.figure(figsize=(10,5))
