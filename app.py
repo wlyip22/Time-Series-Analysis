@@ -110,39 +110,50 @@ else:
     st.table(perf_df)
 
     # ---------------------------
-    # Future Forecast (ML only)
+    # Future Forecast (Corrected Version)
     # ---------------------------
     future_preds = []
 
     if best_model_name in ml_models:
         best_model = ml_models[best_model_name]
 
-        # Features for future forecasting (lag only)
-        data_lag_only = create_features(data, lags, include_rolling=False)
-        X_full = data_lag_only.drop(['Date', 'Close'], axis=1)
-        y_full = data_lag_only['Close']
+        # 1. Use ONLY the features the model was trained on
+        # If your model was trained with rolling features, you MUST include them here
+        # or train a new version with only lags. 
+        # For simplicity, let's assume the model expects the columns in X_train.columns
+        feature_names = X_train.columns.tolist()
+        
+        # 2. Refit on all available data using a DataFrame to keep names
+        best_model.fit(X, y)
 
-        # Refit on all available data
-        best_model.fit(X_full, y_full)
-
-        # Take last row of X_full for recursive forecast
-        last_row_df = X_full.iloc[-1:].copy()
-        last_row_df = last_row_df.fillna(method='ffill')
-        last_lags = last_row_df.values.astype(float).flatten()
+        # 3. Get the most recent data point as a DataFrame
+        current_batch = X.iloc[-1:].copy()
 
         # Recursive future prediction
         for _ in range(forecast_days):
-            next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
+            # Predict using the DataFrame to keep feature names consistent
+            next_price = float(best_model.predict(current_batch)[0])
             future_preds.append(next_price)
 
-            # Shift lag features for next step
-            last_lags[1:] = last_lags[:-1]
-            last_lags[0] = next_price
+            # Update the DataFrame for the next step
+            # We shift the lags: lag_2 becomes lag_1, etc., and insert the new prediction
+            new_row = current_batch.iloc[0].copy()
+            
+            # Update Lags: lag_5 becomes lag_4... lag_1 becomes next_price
+            for i in range(lags, 1, -1):
+                new_row[f'lag_{i}'] = new_row[f'lag_{i-1}']
+            new_row['lag_1'] = next_price
+            
+            # Update Rolling features if they exist
+            if 'rolling_mean' in new_row:
+                # This is a simplification; for a real report, 
+                # you'd average the last 3 predicted/real prices
+                new_row['rolling_mean'] = (new_row['lag_1'] + new_row['lag_2'] + new_row['lag_3']) / 3
+            
+            # Convert back to DataFrame for the next prediction
+            current_batch = pd.DataFrame([new_row])
     else:
-        st.warning(
-            f"{best_model_name} is a time-series model (ARIMA) and cannot forecast future using lag features. "
-            "Future prediction skipped."
-        )
+        st.warning("Future prediction skipped for ARIMA.")
 
     # ---------------------------
     # Visualization
