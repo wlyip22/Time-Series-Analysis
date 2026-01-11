@@ -105,15 +105,15 @@ y_full = data_lag_only['Close']
 
 best_model.fit(X_full, y_full)
 
-last_lags = X_full.iloc[-1].values
+last_lags = X_full.iloc[-1].to_numpy(dtype=float).copy()
 future_preds = []
 
 for _ in range(forecast_days):
-    next_price = best_model.predict(last_lags.reshape(1, -1))[0]
+    next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
     future_preds.append(next_price)
 
-    # shift lag features
-    last_lags = np.roll(last_lags, 1)
+    # shift lag features safely
+    last_lags[1:] = last_lags[:-1]
     last_lags[0] = next_price
 
 # ---------------------------
