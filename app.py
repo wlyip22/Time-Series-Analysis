@@ -1,5 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Real Fundamentals + Forecast
+# app.py - Taiwan Multi-Stock Prediction + Fundamentals + Forecast
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -17,7 +17,7 @@ import matplotlib.pyplot as plt
 # ---------------------------
 # Page title
 # ---------------------------
-st.title("Taiwan Stock Prediction System")
+st.title("Taiwan Stock Multi-Stock Prediction System")
 
 # ---------------------------
 # Sidebar: User Inputs
@@ -28,14 +28,12 @@ tickers_input = st.sidebar.text_input(
     "2330.TW,2317.TW,2454.TW"
 )
 tickers = [t.strip() for t in tickers_input.split(",") if t.strip()]
-ticker = st.sidebar.selectbox("Select a stock:", tickers)
-
 lags = st.sidebar.slider("Number of Lag Days:", 1, 10, 5)
 test_size = st.sidebar.slider("Test Set Size (days):", 30, 200, 50)
 forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 
 # ---------------------------
-# Fetch real fundamentals
+# Cache functions
 # ---------------------------
 @st.cache_data
 def get_fundamentals(symbol):
@@ -71,17 +69,11 @@ def get_fundamentals(symbol):
     except:
         return pd.DataFrame({"Metric":[], "Value":[]})
 
-# ---------------------------
-# Load daily price data
-# ---------------------------
 @st.cache_data
 def load_price_data(symbol):
     df = yf.download(symbol, start="2021-01-01", end="2026-01-01")
     return df[['Close']].reset_index()
 
-# ---------------------------
-# Feature engineering
-# ---------------------------
 def create_features(df, lags, include_rolling=True):
     df = df.copy()
     for i in range(1, lags + 1):
@@ -92,35 +84,31 @@ def create_features(df, lags, include_rolling=True):
     return df.dropna()
 
 # ---------------------------
-# Display fundamentals
+# Multi-stock processing
 # ---------------------------
-st.header(f"Stock: {ticker}")
-fund_df = get_fundamentals(ticker)
-if not fund_df.empty:
-    st.subheader("Real Fundamental Data")
-    st.table(fund_df)
-else:
-    st.info("No fundamental data available for this stock.")
+summary_list = []
 
-# ---------------------------
-# Load price data
-# ---------------------------
-price_data = load_price_data(ticker)
-if price_data.empty:
-    st.error("No price data found for this stock.")
-else:
-    # ---------------------------
-    # Feature engineering for ML
-    # ---------------------------
+for ticker in tickers:
+    st.header(f"Stock: {ticker}")
+    fund_df = get_fundamentals(ticker)
+    if not fund_df.empty:
+        st.subheader("Real Fundamental Data")
+        st.table(fund_df)
+    else:
+        st.info("No fundamental data available.")
+
+    price_data = load_price_data(ticker)
+    if price_data.empty:
+        st.error("No price data found for this stock.")
+        continue
+
     data_feat = create_features(price_data, lags, include_rolling=True)
     X = data_feat.drop(['Date','Close'], axis=1)
     y = data_feat['Close']
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=test_size)
 
-    # ---------------------------
     # Train ML models
-    # ---------------------------
     ml_models = {
         "Linear Regression": LinearRegression(),
         "Random Forest": RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42),
@@ -141,9 +129,7 @@ else:
             "MAE": mean_absolute_error(y_test, pred)
         })
 
-    # ---------------------------
     # ARIMA baseline
-    # ---------------------------
     try:
         arima_model = ARIMA(price_data['Close'][:-len(X_test)], order=(5,1,0))
         arima_result = arima_model.fit()
@@ -157,22 +143,18 @@ else:
     except:
         st.warning("ARIMA failed or not enough data.")
 
-    # ---------------------------
-    # Show performance table
-    # ---------------------------
     perf_df = pd.DataFrame(results)
     best_model_name = perf_df.loc[perf_df['RMSE'].idxmin(), 'Model']
+
     st.subheader(f"Best Model: {best_model_name}")
     st.table(perf_df)
 
-    # ---------------------------
-    # Future forecast (ML models only)
-    # ---------------------------
+    # Future forecast for ML models
     future_preds = []
+    next_day_pred = None
     if best_model_name in ml_models:
         best_model = ml_models[best_model_name]
-        best_model.fit(X, y)  # Refit on full dataset
-
+        best_model.fit(X, y)
         current_batch = X.iloc[-1:].copy()
         for _ in range(forecast_days):
             pred_output = best_model.predict(current_batch)
@@ -184,20 +166,23 @@ else:
             for i in range(lags, 1, -1):
                 new_row_data[f'lag_{i}'] = new_row_data[f'lag_{i-1}']
             new_row_data['lag_1'] = next_price
-
-            # Update rolling stats
             if 'rolling_mean' in new_row_data:
                 lookback = [new_row_data[f'lag_{i}'] for i in range(1, min(4,lags+1))]
                 new_row_data['rolling_mean'] = np.mean(lookback)
                 new_row_data['rolling_std'] = np.std(lookback)
-
             current_batch = pd.DataFrame([new_row_data])
-    else:
-        st.warning(f"Future forecast for {best_model_name} (ARIMA) not supported.")
+        next_day_pred = future_preds[0]
 
-    # ---------------------------
+    # Append summary
+    summary_list.append({
+        "Stock": ticker,
+        "Best Model": best_model_name,
+        "RMSE": perf_df.loc[perf_df['Model']==best_model_name,'RMSE'].values[0],
+        "MAE": perf_df.loc[perf_df['Model']==best_model_name,'MAE'].values[0],
+        "Next Day Price": next_day_pred
+    })
+
     # Visualization
-    # ---------------------------
     plt.figure(figsize=(10,5))
     plt.plot(y_test.values, label="Actual", color="black")
     if best_model_name in ml_models:
@@ -213,17 +198,9 @@ else:
     plt.legend()
     st.pyplot(plt)
 
-    # ---------------------------
-    # Expandable: all model predictions
-    # ---------------------------
-    with st.expander("Show All Model Predictions"):
-        plt.figure(figsize=(10,5))
-        plt.plot(y_test.values, label="Actual", color="black")
-        colors = {'Linear Regression':'green','Random Forest':'blue','XGBoost':'red','SVR':'orange','ARIMA':'purple'}
-        for name, pred in predictions.items():
-            plt.plot(pred, label=name, color=colors.get(name,'gray'))
-        plt.xlabel("Days")
-        plt.ylabel("Close Price")
-        plt.title(f"{ticker} - All Model Predictions")
-        plt.legend()
-        st.pyplot(plt)
+# ---------------------------
+# Multi-stock summary table
+# ---------------------------
+st.header("Multi-Stock Performance Summary")
+summary_df = pd.DataFrame(summary_list)
+st.table(summary_df)
