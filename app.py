@@ -1,5 +1,6 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals + Future Forecast + Historical EPS/Revenue
+# app.py - Taiwan Stock Prediction + Fundamentals + Future Forecast
+# Updated Price History: 2021-01-01 to 2026-01-01
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -35,7 +36,8 @@ forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 # ---------------------------
 @st.cache_data
 def load_price_data(symbol):
-    df = yf.download(symbol, start="2020-01-01", end="2025-01-01")
+    # Updated start and end dates
+    df = yf.download(symbol, start="2021-01-01", end="2026-01-01")
     return df[['Close']].reset_index()
 
 def create_features(df, lags, include_rolling=True):
@@ -73,7 +75,6 @@ else:
             "Profit Margin": info.get("profitMargins", "N/A"),
         }
 
-        # Format numbers
         for k, v in fundamentals.items():
             if isinstance(v, (int, float)):
                 if k in ["Market Cap", "Revenue"]:
@@ -88,26 +89,19 @@ else:
         st.warning("Latest fundamental data not available for this stock.")
 
     # ---------------------------
-    # Historical fundamentals (EPS and Revenue trends)
+    # Historical fundamentals (EPS & Revenue trends)
     # ---------------------------
     st.subheader("Historical Fundamentals (Annual)")
-
     try:
-        fin = ticker_obj.financials.T  # transpose: columns = Net Income, Revenue, etc.
+        fin = ticker_obj.financials.T
         shares_outstanding = info.get("sharesOutstanding", None)
-
-        # EPS calculation: EPS = Net Income / Shares
         if shares_outstanding:
             fin['EPS'] = fin['Net Income'] / shares_outstanding
         else:
             fin['EPS'] = np.nan
-
-        # Keep only EPS and Revenue
         hist_fund = fin[['EPS','Total Revenue']].rename(columns={'Total Revenue':'Revenue'})
-        hist_fund = hist_fund.sort_index()  # chronological order
-
+        hist_fund = hist_fund.sort_index()
         st.line_chart(hist_fund)
-
     except:
         st.warning("Historical fundamentals not available.")
 
