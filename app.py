@@ -126,14 +126,21 @@ else:
 
     best_model.fit(X_full, y_full)
 
-    last_lags = X_full.iloc[-1].to_numpy(dtype=float).copy()
+    # Select last row and ensure numeric
+    last_row_df = X_full.iloc[-1:].copy()  # keep as dataframe to preserve column order
+    last_row_df = last_row_df.fillna(method='ffill')  # fill any potential NaN
+    last_lags = last_row_df.to_numpy(dtype=float).flatten().copy()  # ensure 1D float array
+
     future_preds = []
 
     for _ in range(forecast_days):
-        next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
-        future_preds.append(next_price)
-        last_lags[1:] = last_lags[:-1]
-        last_lags[0] = next_price
+    next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
+    future_preds.append(next_price)
+
+    # shift lag features for recursive forecasting
+    last_lags[1:] = last_lags[:-1]
+    last_lags[0] = next_price
+
 
 # ---------------------------
 # Visualization
