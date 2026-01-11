@@ -120,28 +120,31 @@ else:
     best_model = ml_models[best_model_name]
 
     # Features for future forecasting (lag only)
-data_lag_only = create_features(data, lags, include_rolling=False)
+# Future forecasting only for ML models
+if best_model_name in ml_models:
+    best_model = ml_models[best_model_name]
 
-X_full = data_lag_only.drop(['Date', 'Close'], axis=1)
-y_full = data_lag_only['Close']
+    # Features for future forecasting (lag only)
+    data_lag_only = create_features(data, lags, include_rolling=False)
+    X_full = data_lag_only.drop(['Date', 'Close'], axis=1)
+    y_full = data_lag_only['Close']
 
-best_model.fit(X_full, y_full)
+    best_model.fit(X_full, y_full)
 
-# Select last row and ensure numeric, no NaN, 1D float array
-last_row_df = X_full.iloc[-1:].copy()         # keep as dataframe
-last_row_df = last_row_df.fillna(method='ffill')  # fill any NaN just in case
-last_lags = last_row_df.to_numpy(dtype=float).flatten().copy()  # 1D float array
+    last_row_df = X_full.iloc[-1:].copy()
+    last_row_df = last_row_df.fillna(method='ffill')
+    last_lags = last_row_df.to_numpy(dtype=float).flatten().copy()
 
-
+    # ---------- Recursive forecast ----------
     future_preds = []
+    for _ in range(forecast_days):
+        next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
+        future_preds.append(next_price)
 
-for _ in range(forecast_days):
-    next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
-    future_preds.append(next_price)
+        # Shift lag features for next step
+        last_lags[1:] = last_lags[:-1]
+        last_lags[0] = next_price
 
-    # Shift lag features for next step
-    last_lags[1:] = last_lags[:-1]
-    last_lags[0] = next_price
 
 
 
