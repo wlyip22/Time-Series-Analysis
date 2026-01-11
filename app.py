@@ -98,23 +98,28 @@ st.table(perf_df)
 # ---------------------------
 # Future Forecast (NEW)
 # ---------------------------
-data_lag_only = create_features(data, lags=lags, include_rolling=False)
+ml_models = ['Linear Regression', 'Random Forest', 'XGBoost', 'SVR']
 
-X_full = data_lag_only.drop(['Date', 'Close'], axis=1)
-y_full = data_lag_only['Close']
+if best_model_name not in ml_models:
+    st.warning(
+        f"{best_model_name} does not support feature-based future forecasting. "
+        "Please select an ML-based model."
+    )
+else:
+    # Refit best ML model on full data
+    best_model.fit(X_full, y_full)
 
-best_model.fit(X_full, y_full)
+    last_lags = X_full.iloc[-1].to_numpy(dtype=float).copy()
+    future_preds = []
 
-last_lags = X_full.iloc[-1].to_numpy(dtype=float).copy()
-future_preds = []
+    for _ in range(forecast_days):
+        next_price = best_model.predict(last_lags.reshape(1, -1))[0]
+        next_price = float(next_price)
+        future_preds.append(next_price)
 
-for _ in range(forecast_days):
-    next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
-    future_preds.append(next_price)
+        last_lags[1:] = last_lags[:-1]
+        last_lags[0] = next_price
 
-    # shift lag features safely
-    last_lags[1:] = last_lags[:-1]
-    last_lags[0] = next_price
 
 # ---------------------------
 # Visualization
