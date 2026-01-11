@@ -38,13 +38,18 @@ def load_data(symbol):
     df = yf.download(symbol, start="2020-01-01", end="2025-01-01")
     return df[['Close']].reset_index()
 
-def create_features(df, lags):
+def create_features(df, lags=5, include_rolling=True):
     df = df.copy()
+
     for i in range(1, lags + 1):
         df[f'lag_{i}'] = df['Close'].shift(i)
-    df['rolling_mean'] = df['Close'].shift(1).rolling(3).mean()
-    df['rolling_std'] = df['Close'].shift(1).rolling(3).std()
+
+    if include_rolling:
+        df['rolling_mean'] = df['Close'].shift(1).rolling(window=3).mean()
+        df['rolling_std'] = df['Close'].shift(1).rolling(window=3).std()
+
     return df.dropna()
+
 
 # ---------------------------
 # Load & prepare data
@@ -93,18 +98,23 @@ st.table(perf_df)
 # ---------------------------
 # Future Forecast (NEW)
 # ---------------------------
-best_model.fit(X, y)
+data_lag_only = create_features(data, lags=lags, include_rolling=False)
 
-last_row = X.iloc[-1].values
+X_full = data_lag_only.drop(['Date', 'Close'], axis=1)
+y_full = data_lag_only['Close']
+
+best_model.fit(X_full, y_full)
+
+last_lags = X_full.iloc[-1].values
 future_preds = []
 
 for _ in range(forecast_days):
-    next_price = best_model.predict(last_row.reshape(1, -1))[0]
+    next_price = best_model.predict(last_lags.reshape(1, -1))[0]
     future_preds.append(next_price)
 
-    # update lag features
-    last_row = np.roll(last_row, 1)
-    last_row[0] = next_price
+    # shift lag features
+    last_lags = np.roll(last_lags, 1)
+    last_lags[0] = next_price
 
 # ---------------------------
 # Visualization
