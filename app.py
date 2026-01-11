@@ -1,5 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals-Informed Forecast
+# app.py - Taiwan Stock Prediction + Fundamentals-Informed Forecast (Fixed)
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -54,14 +54,17 @@ def create_features(df, lags, include_rolling=True):
 def load_fundamentals(symbol):
     ticker_obj = yf.Ticker(symbol)
     try:
-        # Historical financials
-        fin = ticker_obj.financials.T  # annual
+        fin = ticker_obj.financials.T  # annual financials
         shares_outstanding = ticker_obj.info.get("sharesOutstanding", None)
-        if shares_outstanding:
+        if shares_outstanding and 'Net Income' in fin.columns:
             fin['EPS'] = fin['Net Income'] / shares_outstanding
         else:
             fin['EPS'] = np.nan
-        fin = fin.rename(columns={'Total Revenue':'Revenue'})
+        # Revenue column
+        if 'Total Revenue' in fin.columns:
+            fin['Revenue'] = fin['Total Revenue']
+        else:
+            fin['Revenue'] = np.nan
         return fin[['EPS','Revenue']].sort_index()
     except:
         return pd.DataFrame()
@@ -77,14 +80,16 @@ if price_data.empty:
     st.error("No price data found.")
 else:
     # ---------------------------
-    # Merge fundamentals to daily data
+    # Merge fundamentals to daily data (fixed)
     # ---------------------------
     if not fund_data.empty:
         fund_data_daily = fund_data.reindex(price_data['Date'], method='ffill')
-        price_data = price_data.merge(fund_data_daily[['EPS','Revenue']], left_on='Date', right_index=True, how='left')
+        fund_data_daily.index = price_data.index  # align index
+        price_data['EPS'] = fund_data_daily['EPS']
+        price_data['Revenue'] = fund_data_daily['Revenue']
     else:
-        price_data['EPS'] = np.nan
-        price_data['Revenue'] = np.nan
+        price_data['EPS'] = 0
+        price_data['Revenue'] = 0
 
     # Fill missing EPS/Revenue with last available value
     price_data[['EPS','Revenue']] = price_data[['EPS','Revenue']].fillna(method='ffill').fillna(0)
