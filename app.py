@@ -1,6 +1,5 @@
 # ---------------------------
-# app.py - Taiwan Stock Prediction + Fundamentals + Future Forecast
-# Updated Price History: 2021-01-01 to 2026-01-01
+# app.py - Taiwan Stock Prediction + Fundamentals-Informed Forecast
 # ---------------------------
 import streamlit as st
 import yfinance as yf
@@ -16,7 +15,7 @@ from statsmodels.tsa.arima.model import ARIMA
 import matplotlib.pyplot as plt
 
 # ---------------------------
-# Sidebar - User Inputs
+# Sidebar
 # ---------------------------
 st.sidebar.title("Settings")
 
@@ -36,7 +35,6 @@ forecast_days = st.sidebar.slider("Forecast Future Days:", 1, 30, 5)
 # ---------------------------
 @st.cache_data
 def load_price_data(symbol):
-    # Updated start and end dates
     df = yf.download(symbol, start="2021-01-01", end="2026-01-01")
     return df[['Close']].reset_index()
 
@@ -50,71 +48,55 @@ def create_features(df, lags, include_rolling=True):
     return df.dropna()
 
 # ---------------------------
-# Load data
+# Load fundamentals
 # ---------------------------
-st.header(f"Stock: {ticker}")
-price_data = load_price_data(ticker)
-
-if price_data.empty:
-    st.error("No price data found for this stock.")
-else:
-    # ---------------------------
-    # Fundamental Analysis (latest snapshot)
-    # ---------------------------
-    st.subheader("Fundamental Analysis (Latest)")
+@st.cache_data
+def load_fundamentals(symbol):
+    ticker_obj = yf.Ticker(symbol)
     try:
-        ticker_obj = yf.Ticker(ticker)
-        info = ticker_obj.info
-
-        fundamentals = {
-            "P/E Ratio": info.get("trailingPE", "N/A"),
-            "EPS": info.get("trailingEPS", "N/A"),
-            "Market Cap": info.get("marketCap", "N/A"),
-            "Dividend Yield": info.get("dividendYield", "N/A"),
-            "Revenue": info.get("totalRevenue", "N/A"),
-            "Profit Margin": info.get("profitMargins", "N/A"),
-        }
-
-        for k, v in fundamentals.items():
-            if isinstance(v, (int, float)):
-                if k in ["Market Cap", "Revenue"]:
-                    fundamentals[k] = f"{v/1e9:.2f} B"
-                elif k in ["Dividend Yield", "Profit Margin"]:
-                    fundamentals[k] = f"{v*100:.2f}%"
-                else:
-                    fundamentals[k] = round(v,2)
-
-        st.table(pd.DataFrame(fundamentals.items(), columns=["Metric", "Value"]))
-    except:
-        st.warning("Latest fundamental data not available for this stock.")
-
-    # ---------------------------
-    # Historical fundamentals (EPS & Revenue trends)
-    # ---------------------------
-    st.subheader("Historical Fundamentals (Annual)")
-    try:
-        fin = ticker_obj.financials.T
-        shares_outstanding = info.get("sharesOutstanding", None)
+        # Historical financials
+        fin = ticker_obj.financials.T  # annual
+        shares_outstanding = ticker_obj.info.get("sharesOutstanding", None)
         if shares_outstanding:
             fin['EPS'] = fin['Net Income'] / shares_outstanding
         else:
             fin['EPS'] = np.nan
-        hist_fund = fin[['EPS','Total Revenue']].rename(columns={'Total Revenue':'Revenue'})
-        hist_fund = hist_fund.sort_index()
-        st.line_chart(hist_fund)
+        fin = fin.rename(columns={'Total Revenue':'Revenue'})
+        return fin[['EPS','Revenue']].sort_index()
     except:
-        st.warning("Historical fundamentals not available.")
+        return pd.DataFrame()
+
+# ---------------------------
+# Load data
+# ---------------------------
+st.header(f"Stock: {ticker}")
+price_data = load_price_data(ticker)
+fund_data = load_fundamentals(ticker)
+
+if price_data.empty:
+    st.error("No price data found.")
+else:
+    # ---------------------------
+    # Merge fundamentals to daily data
+    # ---------------------------
+    if not fund_data.empty:
+        fund_data_daily = fund_data.reindex(price_data['Date'], method='ffill')
+        price_data = price_data.merge(fund_data_daily[['EPS','Revenue']], left_on='Date', right_index=True, how='left')
+    else:
+        price_data['EPS'] = np.nan
+        price_data['Revenue'] = np.nan
+
+    # Fill missing EPS/Revenue with last available value
+    price_data[['EPS','Revenue']] = price_data[['EPS','Revenue']].fillna(method='ffill').fillna(0)
 
     # ---------------------------
-    # Feature Engineering for ML
+    # Feature Engineering
     # ---------------------------
     data_feat = create_features(price_data, lags, include_rolling=True)
     X = data_feat.drop(['Date', 'Close'], axis=1)
     y = data_feat['Close']
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, shuffle=False, test_size=test_size
-    )
+    X_train, X_test, y_train, y_test = train_test_split(X, y, shuffle=False, test_size=test_size)
 
     # ---------------------------
     # Train ML models
@@ -164,7 +146,7 @@ else:
     st.table(perf_df)
 
     # ---------------------------
-    # Future Forecast (ML models only)
+    # Future Forecast
     # ---------------------------
     future_preds = []
     if best_model_name in ml_models:
@@ -183,10 +165,15 @@ else:
                 new_row_data[f'lag_{i}'] = new_row_data[f'lag_{i-1}']
             new_row_data['lag_1'] = next_price
 
+            # Rolling stats
             if 'rolling_mean' in new_row_data:
                 lookback = [new_row_data[f'lag_{i}'] for i in range(1, min(4,lags+1))]
                 new_row_data['rolling_mean'] = np.mean(lookback)
                 new_row_data['rolling_std'] = np.std(lookback)
+
+            # EPS/Revenue remain constant for future days
+            new_row_data['EPS'] = current_batch['EPS'].values[0]
+            new_row_data['Revenue'] = current_batch['Revenue'].values[0]
 
             current_batch = pd.DataFrame([new_row_data])
     else:
@@ -205,7 +192,7 @@ else:
     else:
         plt.plot(predictions.get(best_model_name, []), label="Backtest Prediction", color="red")
 
-    plt.title(f"{ticker} - Backtesting & Future Forecast")
+    plt.title(f"{ticker} - Backtesting & Future Forecast (Fundamentals Included)")
     plt.xlabel("Days")
     plt.ylabel("Close Price")
     plt.legend()
