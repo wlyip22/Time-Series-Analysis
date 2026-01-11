@@ -133,13 +133,15 @@ else:
 
     future_preds = []
 
-    for _ in range(forecast_days):
+for _ in range(forecast_days):
+    # <-- everything inside the loop must be indented
     next_price = float(best_model.predict(last_lags.reshape(1, -1))[0])
     future_preds.append(next_price)
 
     # shift lag features for recursive forecasting
     last_lags[1:] = last_lags[:-1]
     last_lags[0] = next_price
+
 
 
 # ---------------------------
